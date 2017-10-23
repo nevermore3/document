@@ -1,0 +1,133 @@
+#!/bin/bash
+
+########################################################################################
+#description: Used to prepare the cust env 
+#                         EDIT HISTORY FOR MODULE
+#	case					who				when				Action
+# 
+########################################################################################
+function getTiming(){
+    confirm_str=$1
+    start=$2
+    end=$3
+    file_path=$4
+
+    start_s=$(echo $start | cut -d '.' -f 1)
+    start_ns=$(echo $start | cut -d '.' -f 2)
+    end_s=$(echo $end | cut -d '.' -f 1)
+    end_ns=$(echo $end | cut -d '.' -f 2)
+  
+    time=$(( ( 10#$end_s - 10#$start_s ) + ( 10#$end_ns / 1000000 - 10#$start_ns / 1000000 ) /1000 ))
+    if [[ $file_path == "" ]];then
+        echo "${confirm_str} $time s"
+    else
+        file_size=$(stat -c %s $file_path | tr -d '\n')
+        echo "${confirm_str} $time s,file size ${file_size} "
+    fi
+}
+
+
+function public_exit_err()
+{
+	if [[ "$1" -ne 0 ]];then
+		echo "$2" 
+		exit 1
+	fi
+	
+	return 0
+}
+#---------------check parameter---------------------------------------------
+# arg1: $pkg_type_para                   pkg type
+# arg2: $update_app_path_para            update app path
+# arg3: $update_binary_path_para         update-binary path
+# arg4: $softwareversion_path_para       softwareversion path
+# arg5: $output_path_para                output path
+# arg6: $model_country_cn_para           model country cn
+# arg7: $sign_tool_path                  sign tool path
+# arg8: $username_para                   username
+# arg9: $password_para                   password
+#-------------------------------------------------------------------------
+
+# debug_flag：打开/关闭调试开关（on/off）
+if [[ $debug_flag == "on" ]];then
+	set -x
+fi
+
+# 检测参数
+if [[ $# -lt 9 ]];then
+	public_exit_err "1" "[$0,Line:$LINENO] Error:check param failed,please check the number of the param!"
+fi
+
+pkg_type_para=$1
+update_app_path_para=$2
+update_binary_path_para=$3
+softwareversion_path_para=$4
+output_path_para=$5
+model_country_cn_para=$6
+sign_tool_path=$7
+username_para=$8
+password_para=$9
+
+output_file_name="update_sd.zip"
+
+real_output_path=${output_path_para}
+
+update_app_file_name=${update_app_path_para##*/}
+
+ramdom_str=$(date +%s%N | md5sum | head -c 10)
+
+work_dir=${output_path_para}/${ramdom_str}_${model_country_cn_para}
+
+echo "work dir:${work_dir},file name:${update_app_file_name}"
+mkdir -p ${work_dir}/update/META-INF/com/google/android
+mkdir -p ${work_dir}/update/META-INF/com/android
+echo a>${work_dir}/update/META-INF/com/android/otacert
+
+start_all=$(date +%s.%N)
+
+echo "fullpkg">${work_dir}/update/full_mainpkg.tag
+cp -rvf ${update_binary_path_para} ${work_dir}/update/META-INF/com/google/android/
+public_exit_err "$?" "[$0,Line:$LINENO] Error:copy ${update_binary_path_para} to ${work_dir}/update/META-INF/com/google/android/ failed!"
+cp -rvf ${softwareversion_path_para} ${work_dir}/update/
+public_exit_err "$?" "[$0,Line:$LINENO] Error:copy ${softwareversion_path_para} to ${work_dir}/update/ failed!"
+
+if [[ $pkg_type_para == "datapkg" ]];then
+    output_file_name="update_sd_${model_country_cn_para}"
+    real_output_path=${output_path_para}/${model_country_cn_para}
+    echo "SD_PACKAGE_DATAPKG">${work_dir}/update/SD_update.tag
+    echo "Set_data_pkg();">${work_dir}/update/META-INF/com/google/android/updater-script
+    echo "assert(compress_sd_update_from_zip(\"${update_app_file_name}\"));">>${work_dir}/update/META-INF/com/google/android/updater-script
+else
+    output_file_name="update_sd"
+    echo "SD_PACKAGE_MIANPKG">${work_dir}/update/SD_update.tag
+    echo "assert(compress_sd_update_from_zip(\"${update_app_file_name}\"));">${work_dir}/update/META-INF/com/google/android/updater-script
+fi
+
+start_compress=$(date +%s.%N)
+pushd ${work_dir}/update/
+#zip -fzj ${work_dir}/${output_file_name}_unsign.zip ${update_app_path_para}
+public_exit_err "$?" "[$0,Line:$LINENO] Error:execute zip -fzj ${work_dir}/${output_file_name}_unsign.zip ${update_app_path_para} failed!"
+zip -fzr ${work_dir}/${output_file_name}_unsign.zip *
+public_exit_err "$?" "[$0,Line:$LINENO] Error:execute zip -fzr ${work_dir}/${output_file_name}_unsign.zip * failed!"
+popd
+end_compress=$(date +%s.%N)
+getTiming "compress app pkg cost" ${start_compress} ${end_compress} ${update_app_path_para}
+
+start_sign=$(date +%s.%N)
+mkdir -p ${real_output_path}
+
+echo "java -jar ${sign_tool_path}/signapk_online.jar -w rnd-signserver.huawei.com ${username_para} ****** ${sign_tool_path}/hotakey.x509.pem /root/Key/huawei_apkkey_5v/hotakey ${work_dir}/${output_file_name}_unsign.zip ${real_output_path}/${output_file_name}.zip"
+java -jar ${sign_tool_path}/signapk.jar  -w  --app ${update_app_path_para} "rnd-signserver.huawei.com" "${username_para}" "${password_para}" "${sign_tool_path}/hotakey.x509.pem" "/root/Key/huawei_apkkey_5v/hotakey" "${work_dir}/${output_file_name}_unsign.zip" "${real_output_path}/${output_file_name}.zip"
+#java -Djava.library.path="${sign_tool_path}/lib64" -jar ${sign_tool_path}/signapk.jar -w  --app ${update_app_path_para}" ${sign_tool_path}/testkey.x509.pem" "${sign_tool_path}/testkey.pk8" "${work_dir}/${output_file_name}_unsign.zip" "${real_output_path}/${output_file_name}.zip"
+public_exit_err "$?" "[$0,Line:$LINENO] Error:execute ${sign_tool_path}/signapk_online.jar failed!"
+
+end_sign=$(date +%s.%N)
+getTiming "sign zip pkg cost " ${start_sign} ${end_sign}  ${real_output_path}/${output_file_name}.zip
+rm -rf ${work_dir}
+
+end_all=$(date +%s.%N)
+getTiming "all step cost " ${start_all} ${end_all}
+
+echo "make ${real_output_path}/${output_file_name}.zip success!!!"
+echo `date`
+exit 0
